@@ -176,8 +176,23 @@ void *worker_thread(void *arg)
         pthread_mutex_unlock(&pglobal->in[input_number].db);
 
         // send frame to udp server
-        printf("send: %d\n", frame_size);
-        sendto(sd, frame, frame_size, 0, (struct sockaddr*)&addr, sizeof(addr));
+        printf("send: %d kb\n", frame_size/1024);
+        const int MAXUDPSIZE = 1024;
+
+        unsigned char *p = NULL;
+        p = frame;
+        while(frame_size > 0) {
+        	int sendsize;
+        	if(frame_size < MAXUDPSIZE)
+        		sendsize = frame_size;
+        	else
+        		sendsize = MAXUDPSIZE;
+
+        	sendto(sd, p, sendsize, 0, (struct sockaddr*)&addr, sizeof(addr));
+        	frame_size-=sendsize;
+        	p += sendsize;
+        }
+        p = NULL;
 
         /* call the command if user specified one, pass current filename as argument */
         if(command != NULL) {
