@@ -1,0 +1,4 @@
+#/bin/sh
+
+export LD_LIBRARY_PATH="$(pwd)"
+./mjpg_streamer -i "./input_uvc.so" -o "./output_udp.so -I 192.168.0.103 -p 32000"

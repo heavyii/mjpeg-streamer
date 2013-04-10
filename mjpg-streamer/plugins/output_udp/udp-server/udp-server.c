@@ -46,7 +46,7 @@ int main(int argc, char**argv) {
 		snprintf(buffer2, sizeof(buffer2), "udp-%d.jpg", cnt++);
 
 		printf("#cnt=%d\n", cnt);
-		continue;
+		//continue;
 
 		/* open file for write */
 		if ((fd =

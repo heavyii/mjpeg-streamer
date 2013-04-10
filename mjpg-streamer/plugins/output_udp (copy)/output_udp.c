@@ -73,9 +73,6 @@ static int input_number = 0;
 
 // UDP port
 static int port = 0;
-static char *ip = NULL;
-
-static const int UDPDATA_MAX_SIZE = 1024;
 
 /******************************************************************************
 Description.: print a help message
@@ -119,67 +116,6 @@ void worker_cleanup(void *arg)
     close(fd);
 }
 
-static int output_sendto (int sock, const void *frame, int frame_size,
-		struct sockaddr_in *addr)
-{
-	struct frame_info {
-		int8_t 	mask[2];	// 'FM' const
-		int32_t	len;	//
-		int8_t	data[UDPDATA_MAX_SIZE];
-	}__attribute__((__packed__));
-
-	struct frame_info fm;
-	fm.mask[0] = 'F';
-	fm.mask[1] = 'M';
-	fm.len = 0;
-
-	unsigned char *p = NULL;
-    p = (unsigned char *)frame;
-    while(frame_size > 0) {
-    	if(frame_size < UDPDATA_MAX_SIZE)
-    		fm.len = frame_size;
-    	else
-    		fm.len = UDPDATA_MAX_SIZE;
-
-    	memcpy(fm.data, p, fm.len);
-    	int i;
-    	for(i = 0; i < 5; i++){
-    		sendto(sock, &fm, sizeof(fm), 0, (struct sockaddr*)addr, sizeof(struct sockaddr_in));
-
-    		char answer[128];
-    		int len;
-    		int ret;
-    		fd_set input;
-    		struct timeval timeout;
-    		FD_ZERO(&input);
-    		FD_SET(sock, &input);
-
-    		timeout.tv_sec = 0;
-    		timeout.tv_usec = 5000;
-    		ret = select(sock + 1, &input, NULL, NULL, &timeout);
-    		if (ret < 0) {
-    			perror("select");
-    			break;
-    		} else if (ret == 0) {
-    			printf("serial_read TIMEOUT\n");
-    		} else {
-    			if (FD_ISSET(sock, &input)) {
-    	    		len = recvfrom(sock, answer, sizeof(answer), 0, NULL, 0);
-    	    		if(len > 0)
-    	    			if(strncmp(answer, "OK", 2) == 0)
-    	    				break;
-    			}
-    		}
-
-    	}
-    	frame_size-=fm.len;
-    	p += fm.len;
-    }
-    p = NULL;
-
-    return 0;
-}
-
 /******************************************************************************
 Description.: this is the main worker thread
               it loops forever, grabs a fresh frame and stores it to file
@@ -195,6 +131,7 @@ void *worker_thread(void *arg)
     /* set cleanup handler to cleanup allocated ressources */
     pthread_cleanup_push(worker_cleanup, NULL);
 
+    // set UDP server data structures ---------------------------
     if(port <= 0) {
         OPRINT("a valid UDP port must be provided\n");
         return NULL;
@@ -207,10 +144,22 @@ void *worker_thread(void *arg)
     sd = socket(PF_INET, SOCK_DGRAM, 0);
     bzero(&addr, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = inet_addr(ip);
+    addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
+    if(bind(sd, (struct sockaddr*)&addr, sizeof(addr)) != 0)
+        perror("bind");
+    // -----------------------------------------------------------
 
     while(ok >= 0 && !pglobal->stop) {
+        DBG("waiting for a UDP message\n");
+
+        // UDP receive ---------------------------------------------
+        memset(udpbuffer, 0, sizeof(udpbuffer));
+        bytes = recvfrom(sd, udpbuffer, sizeof(udpbuffer), 0, (struct sockaddr*)&addr, &addr_len);
+        // ---------------------------------------------------------
+
+
+
         DBG("waiting for fresh frame\n");
         pthread_mutex_lock(&pglobal->in[input_number].db);
         pthread_cond_wait(&pglobal->in[input_number].db_update, &pglobal->in[input_number].db);
@@ -238,24 +187,53 @@ void *worker_thread(void *arg)
         /* allow others to access the global buffer again */
         pthread_mutex_unlock(&pglobal->in[input_number].db);
 
-        // send frame to udp server
-        printf("send: %d kb\n", frame_size/1024);
+        /* only save a file if a name came in with the UDP message */
+        if(strlen(udpbuffer) > 0) {
+            DBG("writing file: %s\n", udpbuffer);
 
+            /* open file for write. Path must pre-exist */
+            if((fd = open(udpbuffer, O_CREAT | O_RDWR | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)) < 0) {
+                OPRINT("could not open the file %s\n", udpbuffer);
+                return NULL;
+            }
 
-        output_sendto(sd, frame, frame_size, &addr);
+            /* save picture to file */
+            if(write(fd, frame, frame_size) < 0) {
+                OPRINT("could not write to file %s\n", udpbuffer);
+                perror("write()");
+                close(fd);
+                return NULL;
+            }
+
+            close(fd);
+        }
+
+        // send back client's message that came in udpbuffer
+        sendto(sd, udpbuffer, bytes, 0, (struct sockaddr*)&addr, sizeof(addr));
 
         /* call the command if user specified one, pass current filename as argument */
         if(command != NULL) {
+            memset(buffer1, 0, sizeof(buffer1));
+
+            /* udpbuffer still contains the filename, pass it to the command as parameter */
+            snprintf(buffer1, sizeof(buffer1), "%s \"%s\"", command, udpbuffer);
+            DBG("calling command %s", buffer1);
+
+            /* in addition provide the filename as environment variable */
+            if((rc = setenv("MJPG_FILE", udpbuffer, 1)) != 0) {
+                LOG("setenv failed (return value %d)\n", rc);
+            }
+
             /* execute the command now */
             if((rc = system(buffer1)) != 0) {
                 LOG("command failed (return value %d)\n", rc);
             }
         }
 
-//        /* if specified, wait now */
-//        if(delay > 0) {
-//            usleep(1000 * delay);
-//        }
+        /* if specified, wait now */
+        if(delay > 0) {
+            usleep(1000 * delay);
+        }
     }
 
     // close UDP port
@@ -301,8 +279,6 @@ int output_init(output_parameter *param)
             {"delay", required_argument, 0, 0},
             {"c", required_argument, 0, 0},
             {"command", required_argument, 0, 0},
-            {"I", required_argument, 0, 0},
-            {"IP", required_argument, 0, 0},
             {"p", required_argument, 0, 0},
             {"port", required_argument, 0, 0},
             {"i", required_argument, 0, 0},
@@ -353,23 +329,15 @@ int output_init(output_parameter *param)
             DBG("case 6,7\n");
             command = strdup(optarg);
             break;
-
-            /* I, ip addr */
+            /* p, port */
         case 8:
         case 9:
-            DBG("case 8,9\n");
-            ip = strdup(optarg);
-            break;
-
-            /* p, port */
-        case 10:
-        case 11:
             DBG("case 8,9\n");
             port = atoi(optarg);
             break;
             /* i, input */
-        case 12:
-        case 13:
+        case 10:
+        case 11:
             DBG("case 10,11\n");
             input_number = atoi(optarg);
             break;
@@ -377,10 +345,6 @@ int output_init(output_parameter *param)
     }
 
     pglobal = param->global;
-    if(ip == NULL){
-    	OPRINT("ERROR: no ip address, eg: \"-I 172.0.0.1\"\n");
-    	return 1;
-    }
     if(!(input_number < pglobal->incnt)) {
         OPRINT("ERROR: the %d input_plugin number is too much only %d plugins loaded\n", input_number, pglobal->incnt);
         return 1;
@@ -389,7 +353,6 @@ int output_init(output_parameter *param)
     OPRINT("output folder.....: %s\n", folder);
     OPRINT("delay after save..: %d\n", delay);
     OPRINT("command...........: %s\n", (command == NULL) ? "disabled" : command);
-    OPRINT("UDP IP..........: %s\n", ip);
     if(port > 0) {
         OPRINT("UDP port..........: %d\n", port);
     } else {

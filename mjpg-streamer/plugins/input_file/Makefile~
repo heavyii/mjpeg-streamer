@@ -7,20 +7,18 @@
 #
 ###############################################################
 
-# Modified to work with the output_udp plugin by D.Zachariadis
-
-#CC = gcc
+CC = gcc
 
 OTHER_HEADERS = ../../mjpg_streamer.h ../../utils.h ../output.h ../input.h
 
 CFLAGS += -O2 -DLINUX -D_GNU_SOURCE -Wall -shared -fPIC
 #CFLAGS += -DDEBUG
-LFLAGS += -lpthread -ldl
+LFLAGS += 
 
-all: output_udp.so
+all: input_file.so
 
 clean:
 	rm -f *.a *.o core *~ *.so *.lo
 
-output_udp.so: $(OTHER_HEADERS) output_udp.c
-	$(CC) $(CFLAGS) -o $@ output_udp.c
+input_file.so: $(OTHER_HEADERS) input_file.c
+	$(CC) $(CFLAGS) $(LFLAGS) -o $@ input_file.c
