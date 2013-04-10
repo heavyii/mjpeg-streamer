@@ -14,7 +14,7 @@ DESTDIR = /usr/local
 
 # set the compiler to use
 
-CC=arm-linux-gcc
+#CC=arm-linux-gcc
 
 SVNDEV := -D'SVN_REV="$(shell svnversion -c .)"'
 CFLAGS += $(SVNDEV)

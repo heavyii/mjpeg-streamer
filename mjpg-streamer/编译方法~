@@ -1,0 +1,3 @@
+
+交叉编译:
+make CC=arm-linux-gcc
